@@ -4,209 +4,255 @@
 <head>
   <meta charset="utf-8">
   <title>Blippyblip's Corner</title>
-  <link rel="stylesheet" href="styles.css?v=1.0">
+  <link rel="stylesheet" href="sane-defaults.css">
+  <link rel="stylesheet" href="styles.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+
+  <link href="prism.css" rel="stylesheet" />
 
   <!--[if lt IE 9]>
   <script src="http://html5shiv.googlecode.com/svn/trunk/html5.js"></script>
   <![endif]-->
 </head>
 <body>
-<h1 id="a-study-in-dot-optimizing-matrix-dot-product">A study in dot (Optimizing Matrix Dot Product)</h1>
-<pre><code>## 1. Intro
+  <div class="container">
+    <div class="sidebar-container">
+      <nav class="center">
+        <ol class="toc">
+          <li><h2><a href="#1-intro">Intro</a></h2></li>
+          <li><h3><a href="#2-optimizing">Optimizing</a></h2>
+          <ol>
+            <li><h3><a href="#21-naive-implementation-on3">Naive</a></h3></li>
+            <li><h3><a href="#22-loop-unrolling">Loop Unrolling</a></h3></li>
+            <li><h3><a href="#23-vectorization">Vectorization</a></h3></li>
+            <li><h3><a href="#24-cache-blocking">Cache Blocking</a></h3></li>
+            <li><h3><a href="#25-opencl">OpenCL</a></h3></li>
+          </ol>
+          <li><h2><a href="#3-benchmarks">Benchmarks</a></h2></li>
+          <li><h2><a href="#4-references">References</a></h2></li>
+        </ol>
+      </nav>
+    </div>
 
-<h3>2. Optimizing</h2>
-<h3> 2.1 Naive</h3>
-<h3> 2.2 Loop Unrolling</h3>
-<h3> 2.3 AVX2/SIMD Instructions</h3>
-<h3> 2.4 Cache Blocking</h3>
-<h3> 2.5 OpenCL</h3>
+    <header>
+      <h1 id="a-study-in-dot-optimizing-matrix-dot-product">A study in dot (Optimizing Matrix Dot Product)</h1>
+    </header>
 
-<h2> 3. Benchmarks</h2>
-
-<h2> 4. References</h2>
-</code></pre>
-<hr>
+    <article>
+  <hr>
 <h2 id="1-intro">1. Intro</h2>
 <p>Needed an optimized version of the dot product for a project and ended up putting together this doc a long the way.
-I&#39;ll probably come back to this at some point and add stats and more optimizations/alternative algorithms but for the
+Ill probably come back to this at some point and add stats and more optimizations/alternative algorithms but for the
 purposes of my project, this has reached the point where i got what i need for now.</p>
-<hr>
-<h1 id="2-optimizing">2. Optimizing</h1>
+
+<hr id="2-optimization">
+
 <h2 id="21-naive-implementation-on3">2.1 Naive Implementation (O(n^3))</h2>
 <p>The naive implementation uses three nested loops to compute the matrix product.</p>
-<pre><code class="language-cpp">void matrix_multiply_naive(const float* A, const float* B, float* __restrict C, size_t n, size_t m, size_t p) {
-  for (size_t i = 0; i &lt; n; ++i) {
-    for (size_t j = 0; j &lt; p; ++j) {
-      float sum = 0.0f;
-      for (size_t k = 0; k &lt; m; ++k) {
-        sum += A[i * m + k] * B[k * p + j];
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-cpp">void matrix_multiply_naive(const float* A, const float* B, float* __restrict C, size_t n, size_t m, size_t p) {
+    for (size_t i = 0; i &lt; n; ++i) {
+      for (size_t j = 0; j &lt; p; ++j) {
+        float sum = 0.0f;
+        for (size_t k = 0; k &lt; m; ++k) {
+          sum += A[i * m + k] * B[k * p + j];
+        }
+        C[i * p + j] = sum;
       }
-      C[i * p + j] = sum;
     }
   }
-}
-</code></pre>
+  </code>
+</pre>
+
 <hr>
+
 <h2 id="22-loop-unrolling">2.2 Loop Unrolling</h2>
 <p>Loop unrolling reduces the number of iterations in a loop by executing multiple iterations in a single loop cycle.</p>
-<pre><code class="language-cpp">void matrix_multiply_unrolled(const float* A, const float* B, float* __restrict C, size_t n, size_t m, size_t p) {
-  constexpr size_t unroll_factor = 4;
-  for (size_t i = 0; i &lt; n; ++i) {
-    for (size_t j = 0; j &lt; p; ++j) {
-      std::array&lt;float, unroll_factor&gt; sum{};
-      std::memset(sum.data(), 0, sum.size());
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-cpp">void matrix_multiply_unrolled(const float* A, const float* B, float* __restrict C, size_t n, size_t m, size_t p) {
+    constexpr size_t unroll_factor = 4;
+    for (size_t i = 0; i &lt; n; ++i) {
+      for (size_t j = 0; j &lt; p; ++j) {
+        std::array&lt;float, unroll_factor&gt; sum{};
+        std::memset(sum.data(), 0, sum.size());
 
-      size_t k;
-      for (k = 0; k + unroll_factor - 1 &lt; m; k += unroll_factor) {
-          for (size_t u = 0; u &lt; unroll_factor; ++u) {
-              sum[u] += A[i * m + k + u] * B[(k + u) * p + j];
-          }
+        size_t k;
+        for (k = 0; k + unroll_factor - 1 &lt; m; k += unroll_factor) {
+            for (size_t u = 0; u &lt; unroll_factor; ++u) {
+                sum[u] += A[i * m + k + u] * B[(k + u) * p + j];
+            }
+        }
+        
+        float total_sum = 0.0f;
+        for(size_t s = 0; s &lt; unroll_factor; ++s) {
+          total_sum += sum[s];
+        }
+        for (; k &lt; m; ++k) {
+            total_sum += A[i * m + k] * B[k * p + j];
+        }
+        C[i * p + j] = total_sum;
       }
-      
-      float total_sum = 0.0f;
-      for(size_t s = 0; s &lt; unroll_factor; ++s) {
-        total_sum += sum[s];
-      }
-      for (; k &lt; m; ++k) {
-          total_sum += A[i * m + k] * B[k * p + j];
-      }
-      C[i * p + j] = total_sum;
     }
   }
-}
-</code></pre>
-<hr>
-<h2 id="23-vectorizing">2.3 Vectorizing</h2>
-<pre><code class="language-cpp">void matrix_multiply_simd(const float* lhs, const float* rhs, float* result, size_t rows_of_a, size_t shared_dimension, size_t cols_of_b) {
-  assert(lhs.size() == rows_of_a * shared_dimension);
-  assert(rhs.size() == shared_dimension * cols_of_b);
-  assert(result.size() == rows_of_a * cols_of_b);
+  </code>
+</pre>
 
-  for (size_t row = 0; row &lt; rows_of_a; ++row) {
-    for (size_t col = 0; col &lt; cols_of_b; ++col) {
-      __m256 simd_sum = _mm256_setzero_ps();
-      size_t k;
-      for (k = 0; k + 7 &lt; shared_dimension; k += 8) {
-        __m256 simd_a = _mm256_loadu_ps(&amp;lhs[row * shared_dimension + k]);
-        __m256 simd_b = _mm256_loadu_ps(&amp;rhs[k * cols_of_b + col]);
-        simd_sum = _mm256_fmadd_ps(simd_a, simd_b, simd_sum);
+<hr>
+
+<h2 id="23-vectorization">2.3 Vectorization</h2>
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-cpp">void matrix_multiply_simd(const float* lhs, const float* rhs, float* result, size_t rows_of_a, size_t shared_dimension, size_t cols_of_b) {
+    assert(lhs.size() == rows_of_a * shared_dimension);
+    assert(rhs.size() == shared_dimension * cols_of_b);
+    assert(result.size() == rows_of_a * cols_of_b);
+
+    for (size_t row = 0; row &lt; rows_of_a; ++row) {
+      for (size_t col = 0; col &lt; cols_of_b; ++col) {
+        __m256 simd_sum = _mm256_setzero_ps();
+        size_t k;
+        for (k = 0; k + 7 &lt; shared_dimension; k += 8) {
+          __m256 simd_a = _mm256_loadu_ps(&amp;lhs[row * shared_dimension + k]);
+          __m256 simd_b = _mm256_loadu_ps(&amp;rhs[k * cols_of_b + col]);
+          simd_sum = _mm256_fmadd_ps(simd_a, simd_b, simd_sum);
+        }
+        float total_sum[8];
+        _mm256_storeu_ps(total_sum, simd_sum);
+        float final_sum = total_sum[0] + total_sum[1] + total_sum[2] +
+                          total_sum[3] + total_sum[4] + total_sum[5] +
+                          total_sum[6] + total_sum[7];
+        for (; k &lt; shared_dimension; ++k) {
+          final_sum += lhs[row * shared_dimension + k] *
+                      rhs[k * cols_of_b + col];
+        }
+        result[row * cols_of_b + col] = final_sum;
       }
-      float total_sum[8];
-      _mm256_storeu_ps(total_sum, simd_sum);
-      float final_sum = total_sum[0] + total_sum[1] + total_sum[2] +
-                        total_sum[3] + total_sum[4] + total_sum[5] +
-                        total_sum[6] + total_sum[7];
-      for (; k &lt; shared_dimension; ++k) {
-        final_sum += lhs[row * shared_dimension + k] *
-                     rhs[k * cols_of_b + col];
-      }
-      result[row * cols_of_b + col] = final_sum;
     }
   }
-}
-</code></pre>
+  </code>
+</pre>
+
 <hr>
+
 <h2 id="24-cache-blocking">2.4 Cache Blocking</h2>
 <p>Cache blocking improves cache locality by dividing matrices into smaller &quot;blocks&quot; to reduce cache misses and improve performance.</p>
-<pre><code class="language-cpp">void matrix_multiply_blocked(const float* A, const float* B, float* __restrict C, size_t n, size_t m, size_t p) {
-  constexpr size_t BLOCK_SIZE{64};
-  for (size_t i = 0; i &lt; n; i += BLOCK_SIZE) {
-    for (size_t j = 0; j &lt; p; j += BLOCK_SIZE) {
-      for (size_t k = 0; k &lt; m; k += BLOCK_SIZE) {
-        for (size_t ii = i; ii &lt; std::min(i + BLOCK_SIZE, n); ++ii) {
-          for (size_t jj = j; jj &lt; std::min(j + BLOCK_SIZE, p); ++jj) {
-            float sum = 0;
-            for (size_t kk = k; kk &lt; std::min(k + BLOCK_SIZE, m); ++kk) {
-                sum += A[ii * m + kk] * B[kk * p + jj];
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-cpp">void matrix_multiply_blocked(const float* A, const float* B, float* __restrict C, size_t n, size_t m, size_t p) {
+    constexpr size_t BLOCK_SIZE{64};
+    for (size_t i = 0; i &lt; n; i += BLOCK_SIZE) {
+      for (size_t j = 0; j &lt; p; j += BLOCK_SIZE) {
+        for (size_t k = 0; k &lt; m; k += BLOCK_SIZE) {
+          for (size_t ii = i; ii &lt; std::min(i + BLOCK_SIZE, n); ++ii) {
+            for (size_t jj = j; jj &lt; std::min(j + BLOCK_SIZE, p); ++jj) {
+              float sum = 0;
+              for (size_t kk = k; kk &lt; std::min(k + BLOCK_SIZE, m); ++kk) {
+                  sum += A[ii * m + kk] * B[kk * p + jj];
+              }
+              C[ii * p + jj] += sum;
             }
-            C[ii * p + jj] += sum;
           }
         }
       }
     }
   }
-}
-</code></pre>
+  </code>
+</pre>
+
 <hr>
+
 <h2 id="25-opencl">2.5 OpenCL</h2>
 <p>Used OpenCL to keep things entirely in c++ without need for specialized compiler.
 However with NVCC(NVidia Cuda Compiler) catching up to the c++ standard you can sort of do regular c++ with it and combining with NVidia Thrust
 it can work a lot like coding against STL so might be something to investigate soon.</p>
-<pre><code class="language-cpp">struct opencl_context {
-  cl::Platform platform;
-  cl::Device device;
-  cl::Context context;
-  cl::CommandQueue queue;
-  cl::Program program;
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-cpp">struct opencl_context {
+    cl::Platform platform;
+    cl::Device device;
+    cl::Context context;
+    cl::CommandQueue queue;
+    cl::Program program;
 
-  opencl_context() {
-    std::vector&lt;cl::Platform&gt; platforms;
-    cl::Platform::get(&amp;platforms);
-    platform = platforms.front();
+    opencl_context() {
+      std::vector&lt;cl::Platform&gt; platforms;
+      cl::Platform::get(&amp;platforms);
+      platform = platforms.front();
 
-    std::vector&lt;cl::Device&gt; devices;
-    platform.getDevices(CL_DEVICE_TYPE_GPU, &amp;devices);
-    device = devices.front();
+      std::vector&lt;cl::Device&gt; devices;
+      platform.getDevices(CL_DEVICE_TYPE_GPU, &amp;devices);
+      device = devices.front();
 
-    context = cl::Context(device);
-    queue = cl::CommandQueue(context, device);
+      context = cl::Context(device);
+      queue = cl::CommandQueue(context, device);
 
-    auto content = std::string((std::istreambuf_iterator&lt;char&gt;(std::ifstream(&quot;matrix_multiply_kernel.cl&quot;))), std::istreambuf_iterator&lt;char&gt;());
-    cl::Program::Sources sources(1, std::make_pair(kernel_code.c_str(), kernel_code.length()));
-    cl::Program program(context, sources);
+      auto content = std::string((std::istreambuf_iterator&lt;char&gt;(std::ifstream(&quot;matrix_multiply_kernel.cl&quot;))), std::istreambuf_iterator&lt;char&gt;());
+      cl::Program::Sources sources(1, std::make_pair(kernel_code.c_str(), kernel_code.length()));
+      cl::Program program(context, sources);
 
-    if (program.build(devices) != CL_SUCCESS) {
-        std::cerr &lt;&lt; &quot;Error building the program: &quot; &lt;&lt; program.getBuildInfo&lt;CL_PROGRAM_BUILD_LOG&gt;(device) &lt;&lt; std::endl;
-        return;
-    }
-  }
-
-  static opencl_context instance() {
-    static opencl_context _instance{};
-    return _instance;
-  }
-};
-
-void matrix_multiply_opencl(const float* A, const float* B, float* C, size_t n, size_t m, size_t p) {
-    auto opencl = opencl_context::instance();    
-
-    auto buffer_A = cl::Buffer(opencl.context, CL_MEM_READ_ONLY, sizeof(float) * n * m);
-    auto buffer_B = cl::Buffer(opencl.context, CL_MEM_READ_ONLY, sizeof(float) * m * p);
-    auto buffer_C = cl::Buffer(opencl.context, CL_MEM_WRITE_ONLY, sizeof(float) * n * p);
-
-    opencl.queue.enqueueWriteBuffer(buffer_A, CL_TRUE, 0, sizeof(float) * n * m, A.data());
-    opencl.queue.enqueueWriteBuffer(buffer_B, CL_TRUE, 0, sizeof(float) * m * p, B.data());
-
-    auto kernel = cl::Kernel(program, &quot;matrix_multiply&quot;);
-    kernel.setArg(0, buffer_A);
-    kernel.setArg(1, buffer_B);
-    kernel.setArg(2, buffer_C);
-    kernel.setArg(3, static_cast&lt;int&gt;(m));
-
-    cl::NDRange global_size(n, p);
-    cl::NDRange local_size(16, 16);
-    opencl.queue.enqueueNDRangeKernel(kernel, cl::NullRange, global_size, local_size);
-    opencl.queue.enqueueReadBuffer(buffer_C, CL_TRUE, 0, sizeof(float) * n * p, C.data());
-}
-</code></pre>
-<pre><code class="language-cl">matrix_multiply_kernel.cl:
-__kernel void matrix_multiply(__global const float* A, __global const float* B, __global float* C, int m) {
-    int i = get_global_id(0);
-    int j = get_global_id(1);
-    float sum = 0.0f;
-    for (int k = 0; k &lt; m; ++k) {
-        sum += A[i * m + k] * B[k * get_global_size(1) + j];
+      if (program.build(devices) != CL_SUCCESS) {
+          std::cerr &lt;&lt; &quot;Error building the program: &quot; &lt;&lt; program.getBuildInfo&lt;CL_PROGRAM_BUILD_LOG&gt;(device) &lt;&lt; std::endl;
+          return;
+      }
     }
 
-    C[i * get_global_size(1) + j] = sum;
-}
-</code></pre>
+    static opencl_context instance() {
+      static opencl_context _instance{};
+      return _instance;
+    }
+  };
+
+  void matrix_multiply_opencl(const float* A, const float* B, float* C, size_t n, size_t m, size_t p) {
+      auto opencl = opencl_context::instance();    
+
+      auto buffer_A = cl::Buffer(opencl.context, CL_MEM_READ_ONLY, sizeof(float) * n * m);
+      auto buffer_B = cl::Buffer(opencl.context, CL_MEM_READ_ONLY, sizeof(float) * m * p);
+      auto buffer_C = cl::Buffer(opencl.context, CL_MEM_WRITE_ONLY, sizeof(float) * n * p);
+
+      opencl.queue.enqueueWriteBuffer(buffer_A, CL_TRUE, 0, sizeof(float) * n * m, A.data());
+      opencl.queue.enqueueWriteBuffer(buffer_B, CL_TRUE, 0, sizeof(float) * m * p, B.data());
+
+      auto kernel = cl::Kernel(program, &quot;matrix_multiply&quot;);
+      kernel.setArg(0, buffer_A);
+      kernel.setArg(1, buffer_B);
+      kernel.setArg(2, buffer_C);
+      kernel.setArg(3, static_cast&lt;int&gt;(m));
+
+      cl::NDRange global_size(n, p);
+      cl::NDRange local_size(16, 16);
+      opencl.queue.enqueueNDRangeKernel(kernel, cl::NullRange, global_size, local_size);
+      opencl.queue.enqueueReadBuffer(buffer_C, CL_TRUE, 0, sizeof(float) * n * p, C.data());
+  }
+  </code>
+</pre>
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-opencl">
+    __kernel void matrix_multiply(__global const float* A, __global const float* B, __global float* C, int m) {
+        int i = get_global_id(0);
+        int j = get_global_id(1);
+        float sum = 0.0f;
+        for (int k = 0; k &lt; m; ++k) {
+            sum += A[i * m + k] * B[k * get_global_size(1) + j];
+        }
+
+        C[i * get_global_size(1) + j] = sum;
+    }
+  </code>
+</pre>
+
 <hr>
+
 <h1 id="3-microbenchmarks">3. Microbenchmarks</h1>
-<pre><code class="language-cpp">#include &lt;picobench/picobench.hpp&gt;
+<pre>
+  <button class="copy-button" data-clipboard-target="#code-block-1">Copy</button>
+  <code id="code-block-1" class="language-cpp">
+#include &lt;picobench.hpp&gt;
 
 size_t n = 256, m = 256, p = 256; // can use s.iterations() in the benchmarks to scale the tests by dimension instead of only by iteration
 
@@ -242,11 +288,28 @@ void benchmark_opencl(picobench::state&amp; s) {
 }
 PICOBENCH(benchmark_opencl);
 </code></pre>
+
 <p>Don&#39;t forget to enable AVX2 support in the compiler flags.</p>
+
 <hr>
+
+<footer>
 <h2 id="4-references-and-sources">4. References and sources</h2>
-<p><a href="https://en.algorithmica.org/hpc/algorithms/matmul/">https://en.algorithmica.org/hpc/algorithms/matmul/</a> (Huge thanks to algorithmica, inspired me to produce something similar for dot product)
-<a href="https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html">https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html</a>
-<a href="https://www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf">https://www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf</a></p>
+<p><a class="reference" href="https://en.algorithmica.org/hpc/algorithms/matmul/">https://en.algorithmica.org/hpc/algorithms/matmul/</a> (Huge thanks to algorithmica, inspired me to produce something similar for dot product)</p>
+<p><a class="reference" href="https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html">https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html</a></p>
+<p><a class="reference" href="https://www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf">https://www.cs.utexas.edu/users/pingali/CS378/2008sp/papers/gotoPaper.pdf</a></p>
+</footer>
+</article>
+
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.8/clipboard.min.js"></script>
+<script>
+  new ClipboardJS('.copy-button');
+</script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.27.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.27.0/components/prism-c.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.27.0/components/prism-opencl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.27.0/components/prism-cpp.min.js"></script>
+
 </body>
 </html>
